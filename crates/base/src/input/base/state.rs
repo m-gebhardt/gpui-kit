@@ -4533,6 +4533,10 @@ impl<M: InputModeKind> InputBaseState<M> {
 }
 
 impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
+    fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+        Some(self.offset_to_utf16(self.text.len()))
+    }
+
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
