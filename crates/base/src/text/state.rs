@@ -12,7 +12,7 @@ use std::{
 use web_time::Instant;
 
 use gpui::{
-    App, AppContext as _, Bounds, Context, EntityId, FocusHandle, IntoElement, KeyBinding,
+    App, AppContext as _, Bounds, Context, EntityId, FocusHandle, Hsla, IntoElement, KeyBinding,
     ListState, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Task, Window,
     prelude::FluentBuilder as _, px,
 };
@@ -980,7 +980,45 @@ impl TextViewState {
         if !self.selectable {
             return None;
         }
-        self.selection_adapter.selection_points(cx)
+        self.selection_adapter
+            .selection_points(self.content_origin(), cx)
+    }
+
+    /// Where this view's content starts in the window this frame.
+    fn content_origin(&self) -> Point<Pixels> {
+        self.bounds.origin + self.scroll_offset()
+    }
+
+    /// Where this selectable view last painted, in window coordinates.
+    /// Unlike [`Self::bounds`], which a list measuring the view may set
+    /// to where it laid it out to measure, this is where its text shows.
+    pub fn painted_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.selection_adapter.painted_bounds()
+    }
+
+    /// Where this view last painted the ends of its selection, relative to
+    /// its [`Self::painted_bounds`]: the caret line box before the first
+    /// selected character and the one after the last. `None` where it
+    /// painted no selection.
+    ///
+    /// An application reads it between frames to place something beside
+    /// the selection, such as a button that acts on it, without covering
+    /// the text.
+    pub fn selection_edges(&self) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        self.selection_adapter.painted_selection_edges()
+    }
+
+    /// Where this view last painted the end of each color of its
+    /// [range highlights](Self::set_range_highlights): the box behind the
+    /// last line of the last highlight of that color, relative to its
+    /// [`Self::painted_bounds`], in document order. Only a selectable view
+    /// reports them, and only text it painted: a highlight scrolled out of
+    /// a virtualized view's list reports nothing.
+    ///
+    /// Give a highlight a color of its own to place something beside where
+    /// it ends, such as a marker for a note on it, without covering text.
+    pub fn range_highlight_ends(&self) -> Vec<(Hsla, Bounds<Pixels>)> {
+        self.selection_adapter.painted_range_highlight_ends()
     }
 
     /// [`Self::selection_points`] for the text that paints now: a drag that
@@ -993,7 +1031,8 @@ impl TextViewState {
         if !self.selectable {
             return None;
         }
-        self.selection_adapter.painted_selection_points(cx)
+        self.selection_adapter
+            .painted_selection_points(self.content_origin(), cx)
     }
 
     pub(crate) fn has_selection(&self, cx: &App) -> bool {
