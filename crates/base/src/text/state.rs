@@ -980,8 +980,7 @@ impl TextViewState {
         if !self.selectable {
             return None;
         }
-        self.selection_adapter
-            .selection_points(self.content_origin(), cx)
+        self.selection_adapter.selection_points(None, cx)
     }
 
     /// Where this view's content starts in the window this frame.

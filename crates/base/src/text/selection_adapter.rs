@@ -440,7 +440,7 @@ impl TextViewSelectionAdapter {
         origin: Point<Pixels>,
         cx: &App,
     ) -> Option<(Point<Pixels>, Point<Pixels>)> {
-        let (anchor, cursor) = self.selection_points(origin, cx)?;
+        let (anchor, cursor) = self.selection_points(Some(origin), cx)?;
         crate::global_state::confine_to_cell(
             self.selection
                 .table_cell_selection(cx)
@@ -452,28 +452,28 @@ impl TextViewSelectionAdapter {
     }
 
     /// The window selection's ends in window coordinates, `origin` being
-    /// where this view's content starts this frame.
+    /// where this view's content starts in the frame it paints, if it paints
+    /// now.
     ///
     /// The window resolves each end against the geometry its participant
     /// registered, which a view does once it has painted: while its text
-    /// paints, that is the last frame's. An end in this view is placed from
-    /// `origin` instead, so a view that moved, such as one in a list that
-    /// scrolled, selects the same text as before rather than the text that
-    /// moved under the old position.
+    /// paints, that is the last frame's. While it paints, an end in this
+    /// view is placed from `origin` instead, so a view that moved, such as
+    /// one in a list that scrolled, selects the same text as before rather
+    /// than the text that moved under the old position. Between paints the
+    /// registered geometry is the one the painted text was laid out in, so
+    /// the resolved points stand.
     pub(super) fn selection_points(
         &self,
-        origin: Point<Pixels>,
+        origin: Option<Point<Pixels>>,
         cx: &App,
     ) -> Option<(Point<Pixels>, Point<Pixels>)> {
         let snapshot = self.selection.snapshot(cx)?;
         let points = snapshot.window_points()?;
         let id = self.selection.entity_id();
-        let place = |endpoint: TextSelectionEndpoint, resolved: Point<Pixels>| match endpoint
-            .entity_id()
-            == Some(id)
-        {
-            true => endpoint.content_point() + origin,
-            false => resolved,
+        let place = |endpoint: TextSelectionEndpoint, resolved: Point<Pixels>| match origin {
+            Some(origin) if endpoint.entity_id() == Some(id) => endpoint.content_point() + origin,
+            _ => resolved,
         };
         Some((
             place(snapshot.anchor(), points.anchor()),
@@ -481,15 +481,15 @@ impl TextViewSelectionAdapter {
         ))
     }
 
-    /// Where this view last painted the ends of its selection: the caret
-    /// line boxes before its first selected character and after its last,
-    /// relative to its [painted bounds](Self::painted_bounds). `None` while
-    /// it painted none.
     /// See [`TextViewState::painted_bounds`](super::TextViewState::painted_bounds).
     pub(super) fn painted_bounds(&self) -> Option<Bounds<Pixels>> {
         self.frame.borrow().painted_bounds
     }
 
+    /// Where this view last painted the ends of its selection: the caret
+    /// line boxes before its first selected character and after its last,
+    /// relative to its [painted bounds](Self::painted_bounds). `None` while
+    /// it painted none.
     pub(super) fn painted_selection_edges(&self) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
         self.frame.borrow().content_edges
     }
