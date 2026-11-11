@@ -730,6 +730,13 @@ impl TextViewState {
         Ok(())
     }
 
+    /// Drops the reveal [`Self::reveal_range`] took and has not carried out,
+    /// so it never scrolls: as when its application took its reader
+    /// elsewhere since.
+    pub fn cancel_reveal(&mut self) {
+        self.pending_reveal = None;
+    }
+
     /// Remove all range highlights.
     pub fn clear_range_highlights(&mut self, cx: &mut Context<Self>) {
         if self.range_highlights.take().is_some() {
@@ -3684,6 +3691,16 @@ mod tests {
             // An edit before it in its paragraph drops it.
             request(&state, "target", cx, |state, cx| {
                 state.set_text(&markdown.replacen("words", "WORDS", 1), cx);
+                assert!(state.pending_reveal.is_none());
+            });
+        }
+
+        #[gpui::test]
+        fn a_cancelled_reveal_is_dropped(cx: &mut TestAppContext) {
+            let (state, cx) = window(&paragraphs(200), Container::Scrollable, cx);
+
+            request(&state, "paragraph 190", cx, |state, _| {
+                state.cancel_reveal();
                 assert!(state.pending_reveal.is_none());
             });
         }
