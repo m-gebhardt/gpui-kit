@@ -1087,7 +1087,7 @@ impl Inline {
     }
 
     /// Paint each range highlight behind the text of its range.
-    fn paint_range_highlights(&self, text_layout: &TextLayout, window: &mut Window) {
+    fn paint_range_highlights(&self, text_layout: &TextLayout, window: &mut Window, cx: &App) {
         let glyphs = glyph_boxes(
             text_layout,
             window.text_style().text_align,
@@ -1095,15 +1095,22 @@ impl Inline {
         );
         let origin = text_layout.bounds().origin;
         let line_height = text_layout.line_height();
+        let text_view_state = GlobalState::global(cx).text_view_state();
         for (range, color) in &self.range_backgrounds {
+            let mut last = None;
             for (row, left, right) in range_boxes(&glyphs, range.clone()) {
-                window.paint_quad(gpui::fill(
-                    Bounds::from_corners(
-                        point(origin.x + left, origin.y + line_height * row as f32),
-                        point(origin.x + right, origin.y + line_height * (row + 1) as f32),
-                    ),
-                    *color,
-                ));
+                let line = Bounds::from_corners(
+                    point(origin.x + left, origin.y + line_height * row as f32),
+                    point(origin.x + right, origin.y + line_height * (row + 1) as f32),
+                );
+                window.paint_quad(gpui::fill(line, *color));
+                last = Some(line);
+            }
+            if let (Some(last), Some(state)) = (last, &text_view_state) {
+                state
+                    .read(cx)
+                    .selection_adapter
+                    .register_range_highlight_end(*color, last);
             }
         }
     }
@@ -1221,7 +1228,7 @@ impl Element for Inline {
         }
         let text_layout = self.styled_text.layout().clone();
         if !self.range_backgrounds.is_empty() {
-            self.paint_range_highlights(&text_layout, window);
+            self.paint_range_highlights(&text_layout, window, cx);
         }
         _ = text_layout.paint_background(window, cx);
 
