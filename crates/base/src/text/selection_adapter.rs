@@ -5,7 +5,7 @@ use crate::{
     TextSelectionEvent, TextSelectionHandle, TextSelectionRegistration, TextSelectionRun,
     TextSelectionSnapshot,
 };
-use gpui::{App, Bounds, EntityId, Hitbox, Pixels, Point, WeakEntity, Window};
+use gpui::{App, Bounds, EntityId, Hitbox, Hsla, Pixels, Point, WeakEntity, Window};
 
 use super::{
     TextViewState, inline::InlineSelectionProjection,
@@ -103,6 +103,18 @@ struct PaintedText {
     /// The caret boxes at the first and last selected character painted this
     /// frame, where the touch handles go.
     selection_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
+    /// Where the view last registered, in window coordinates. A list
+    /// measuring the view lays it out elsewhere, so its layout bounds may
+    /// not be where it painted. Kept past `begin_frame`, as the two below,
+    /// so the view's owner reads them between frames.
+    painted_bounds: Option<Bounds<Pixels>>,
+    /// `selection_edges` relative to `painted_bounds`' origin.
+    content_edges: Option<(Bounds<Pixels>, Bounds<Pixels>)>,
+    /// The last line box of each range highlight color painted this frame,
+    /// in window coordinates, in the order they were painted.
+    highlight_ends: Vec<(Hsla, Bounds<Pixels>)>,
+    /// `highlight_ends` relative to `painted_bounds`' origin.
+    content_highlight_ends: Vec<(Hsla, Bounds<Pixels>)>,
 }
 
 pub(super) enum CopyProjection {
@@ -322,6 +334,23 @@ impl TextViewSelectionAdapter {
         frame.text_runs.clear();
         frame.copy_projections.clear();
         frame.selection_edges = None;
+        frame.highlight_ends.clear();
+    }
+
+    /// Records where a range highlight of `color` painted its last line box
+    /// in one inline. Inlines paint in document order, so the last one
+    /// recorded for a color is where the last highlight of that color ends.
+    pub(super) fn register_range_highlight_end(&self, color: Hsla, line: Bounds<Pixels>) {
+        let mut frame = self.frame.borrow_mut();
+        frame
+            .highlight_ends
+            .retain(|(painted, _)| *painted != color);
+        frame.highlight_ends.push((color, line));
+    }
+
+    /// See [`TextViewState::range_highlight_ends`](super::TextViewState::range_highlight_ends).
+    pub(super) fn painted_range_highlight_ends(&self) -> Vec<(Hsla, Bounds<Pixels>)> {
+        self.frame.borrow().content_highlight_ends.clone()
     }
 
     /// Records one inline's painted selection ends. Inlines paint in document
@@ -350,7 +379,20 @@ impl TextViewSelectionAdapter {
         window: &mut Window,
         cx: &mut App,
     ) {
-        let frame = self.frame.borrow();
+        let mut frame = self.frame.borrow_mut();
+        let origin = bounds.origin;
+        frame.painted_bounds = Some(bounds);
+        frame.content_edges = frame.selection_edges.map(|(start, end)| {
+            (
+                Bounds::new(start.origin - origin, start.size),
+                Bounds::new(end.origin - origin, end.size),
+            )
+        });
+        frame.content_highlight_ends = frame
+            .highlight_ends
+            .iter()
+            .map(|(color, line)| (*color, Bounds::new(line.origin - origin, line.size)))
+            .collect();
         self.selection.set_hit_test_runs(&frame.text_runs, cx);
         let registration = TextSelectionRegistration::new(hitbox, bounds)
             .with_scroll_offset(scroll_offset)
@@ -395,9 +437,10 @@ impl TextViewSelectionAdapter {
 
     pub(super) fn painted_selection_points(
         &self,
+        origin: Point<Pixels>,
         cx: &App,
     ) -> Option<(Point<Pixels>, Point<Pixels>)> {
-        let (anchor, cursor) = self.selection_points(cx)?;
+        let (anchor, cursor) = self.selection_points(Some(origin), cx)?;
         crate::global_state::confine_to_cell(
             self.selection
                 .table_cell_selection(cx)
@@ -408,9 +451,47 @@ impl TextViewSelectionAdapter {
         )
     }
 
-    pub(super) fn selection_points(&self, cx: &App) -> Option<(Point<Pixels>, Point<Pixels>)> {
-        let points = self.selection.snapshot(cx)?.window_points()?;
-        Some((points.anchor(), points.cursor()))
+    /// The window selection's ends in window coordinates, `origin` being
+    /// where this view's content starts in the frame it paints, if it paints
+    /// now.
+    ///
+    /// The window resolves each end against the geometry its participant
+    /// registered, which a view does once it has painted: while its text
+    /// paints, that is the last frame's. While it paints, an end in this
+    /// view is placed from `origin` instead, so a view that moved, such as
+    /// one in a list that scrolled, selects the same text as before rather
+    /// than the text that moved under the old position. Between paints the
+    /// registered geometry is the one the painted text was laid out in, so
+    /// the resolved points stand.
+    pub(super) fn selection_points(
+        &self,
+        origin: Option<Point<Pixels>>,
+        cx: &App,
+    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let snapshot = self.selection.snapshot(cx)?;
+        let points = snapshot.window_points()?;
+        let id = self.selection.entity_id();
+        let place = |endpoint: TextSelectionEndpoint, resolved: Point<Pixels>| match origin {
+            Some(origin) if endpoint.entity_id() == Some(id) => endpoint.content_point() + origin,
+            _ => resolved,
+        };
+        Some((
+            place(snapshot.anchor(), points.anchor()),
+            place(snapshot.cursor(), points.cursor()),
+        ))
+    }
+
+    /// See [`TextViewState::painted_bounds`](super::TextViewState::painted_bounds).
+    pub(super) fn painted_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.frame.borrow().painted_bounds
+    }
+
+    /// Where this view last painted the ends of its selection: the caret
+    /// line boxes before its first selected character and after its last,
+    /// relative to its [painted bounds](Self::painted_bounds). `None` while
+    /// it painted none.
+    pub(super) fn painted_selection_edges(&self) -> Option<(Bounds<Pixels>, Bounds<Pixels>)> {
+        self.frame.borrow().content_edges
     }
 
     pub(super) fn set_local_selection(&self, active: bool, cx: &mut App) {
